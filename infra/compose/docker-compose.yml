@@ -1,0 +1,89 @@
+# Local simulation of the customer environment.
+#
+# The point is not convenience — it is that the CONSTRAINTS are real here. The
+# agent runs on an internal network with no route to the internet, reaches
+# secrets only through Vault, and fails in exactly the way it would fail in the
+# customer VPC if something is misconfigured.
+#
+# A simulation that is easier than production teaches you nothing. This one is
+# deliberately as restrictive as the real thing.
+#
+#   docker compose up --build
+#   docker compose run --rm verifier
+
+services:
+  vault:
+    image: hashicorp/vault:1.17
+    cap_add: [IPC_LOCK]
+    environment:
+      VAULT_DEV_ROOT_TOKEN_ID: ${VAULT_DEV_TOKEN:-dev-only-not-a-real-token}
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "vault", "status", "-address=http://127.0.0.1:8200"]
+      interval: 5s
+      retries: 10
+
+  # Stands in for the AWS APIs the agent calls: Secrets Manager, DynamoDB,
+  # CloudWatch. Reachable only on the internal network, like a VPC endpoint.
+  aws-endpoints:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: secretsmanager,dynamodb,cloudwatch,kms
+      DEBUG: 0
+    networks: [internal]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      retries: 20
+
+  # The only egress path. Allow-listed by hostname, mirroring the Network
+  # Firewall rule in Terraform. Everything else is refused.
+  egress-proxy:
+    image: ubuntu/squid:latest
+    volumes:
+      - ./squid.conf:/etc/squid/squid.conf:ro
+    networks: [internal, egress]
+
+  agent:
+    build:
+      context: ../../app
+      dockerfile: Dockerfile
+    depends_on:
+      vault: {condition: service_healthy}
+      aws-endpoints: {condition: service_healthy}
+    environment:
+      DEPLOY_ENV: local-sim
+      AWS_REGION: eu-west-2
+      AWS_ENDPOINT_URL: http://aws-endpoints:4566
+      VAULT_ADDR: http://vault:8200
+      HTTPS_PROXY: http://egress-proxy:3128
+      HTTP_PROXY: http://egress-proxy:3128
+      NO_PROXY: aws-endpoints,vault,localhost,127.0.0.1
+      SESSION_TABLE: cascade-support-agent-sessions
+      METRIC_NAMESPACE: Cascade/SupportAgent
+    # NO internet access. Same as the customer VPC: private network only, and
+    # the proxy is the single controlled way out.
+    networks: [internal]
+    read_only: true
+    tmpfs: [/tmp]
+    user: "10001:10001"
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  verifier:
+    build:
+      context: ../..
+      dockerfile: scripts/Dockerfile.verifier
+    depends_on: [agent]
+    environment:
+      AWS_ENDPOINT_URL: http://aws-endpoints:4566
+      VAULT_ADDR: http://vault:8200
+      EGRESS_PROXY: http://egress-proxy:3128
+    networks: [internal]
+    profiles: [verify]
+
+networks:
+  internal:
+    internal: true   # no route off this network. This line is the whole point.
+  egress:

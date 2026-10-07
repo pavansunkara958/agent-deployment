@@ -1,0 +1,25 @@
+# Copy to terraform.tfvars. Contains no secrets — only identifiers.
+
+customer_account_id = "123456789012"
+customer_prefix     = "cascade"
+environment         = "prod"
+owning_team         = "cascade-platform-engineering"
+cost_centre         = "CC-4471"
+
+region   = "eu-west-2"
+vpc_cidr = "10.42.0.0/16"
+az_count = 2
+
+image_tag = "sha-abc1234"   # never "latest"
+
+ci_oidc_provider_arn = "arn:aws:iam::123456789012:oidc-provider/token.actions.githubusercontent.com"
+ci_repo              = "cascade-retail/support-agent-deploy"
+
+breakglass_principal_arns = [
+  "arn:aws:iam::123456789012:role/CascadePlatformOnCall",
+]
+
+pci_data_bucket = "cascade-cardholder-data-euw2"
+
+allowed_egress_hosts = ["api.groq.com"]
+model_base_url       = "https://api.groq.com/openai/v1"
